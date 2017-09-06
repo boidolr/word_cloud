@@ -42,7 +42,7 @@ class IntegralOccupancyMap(object):
 
     def sample_position(self, size_x, size_y, random_state):
         return query_integral_image(self.integral, size_x, size_y,
-                                    random_state)
+                                    lambda c: c[random_state.randint(0, len(c)),:])
 
     def update(self, img_array, pos_x, pos_y):
         partial_integral = np.cumsum(np.cumsum(img_array[pos_x:, pos_y:],
