@@ -12,17 +12,16 @@ from random import Random
 import os
 import re
 import sys
-import colorsys
 import numpy as np
 from operator import itemgetter
 
 from PIL import Image
-from PIL import ImageColor
 from PIL import ImageDraw
 from PIL import ImageFont
 
 from .query_integral_image import query_integral_image
 from .tokenization import unigrams_and_bigrams, process_tokens
+from .color_functions import colormap_color_func, get_single_color_func, random_color_func
 
 FILE = os.path.dirname(__file__)
 FONT_PATH = os.environ.get('FONT_PATH', os.path.join(FILE, 'DroidSansMono.ttf'))
@@ -59,90 +58,6 @@ class IntegralOccupancyMap(object):
             partial_integral += self.integral[pos_x:, pos_y - 1][:, np.newaxis]
 
         self.integral[pos_x:, pos_y:] = partial_integral
-
-
-def random_color_func(word=None, font_size=None, position=None,
-                      orientation=None, font_path=None, random_state=None):
-    """Random hue color generation.
-
-    Default coloring method. This just picks a random hue with value 80% and
-    lumination 50%.
-
-    Parameters
-    ----------
-    word, font_size, position, orientation  : ignored.
-
-    random_state : random.Random object or None, (default=None)
-        If a random object is given, this is used for generating random
-        numbers.
-
-    """
-    if random_state is None:
-        random_state = Random()
-    return "hsl(%d, 80%%, 50%%)" % random_state.randint(0, 255)
-
-
-class colormap_color_func(object):
-    """Color func created from matplotlib colormap.
-
-    Parameters
-    ----------
-    colormap : string or matplotlib colormap
-        Colormap to sample from
-
-    Example
-    -------
-    >>> WordCloud(color_func=colormap_color_func("magma"))
-
-    """
-    def __init__(self, colormap):
-        import matplotlib.pyplot as plt
-        self.colormap = plt.cm.get_cmap(colormap)
-
-    def __call__(self, word, font_size, position, orientation,
-                 random_state=None, **kwargs):
-        if random_state is None:
-            random_state = Random()
-        r, g, b, _ = np.maximum(0, 255 * np.array(self.colormap(
-            random_state.uniform(0, 1))))
-        return "rgb({:.0f}, {:.0f}, {:.0f})".format(r, g, b)
-
-
-def get_single_color_func(color):
-    """Create a color function which returns a single hue and saturation with.
-    different values (HSV). Accepted values are color strings as usable by
-    PIL/Pillow.
-
-    >>> color_func1 = get_single_color_func('deepskyblue')
-    >>> color_func2 = get_single_color_func('#00b4d2')
-    """
-    old_r, old_g, old_b = ImageColor.getrgb(color)
-    rgb_max = 255.
-    h, s, v = colorsys.rgb_to_hsv(old_r / rgb_max, old_g / rgb_max,
-                                  old_b / rgb_max)
-
-    def single_color_func(word=None, font_size=None, position=None,
-                          orientation=None, font_path=None, random_state=None):
-        """Random color generation.
-
-        Additional coloring method. It picks a random value with hue and
-        saturation based on the color given to the generating function.
-
-        Parameters
-        ----------
-        word, font_size, position, orientation  : ignored.
-
-        random_state : random.Random object or None, (default=None)
-          If a random object is given, this is used for generating random
-          numbers.
-
-        """
-        if random_state is None:
-            random_state = Random()
-        r, g, b = colorsys.hsv_to_rgb(h, s, random_state.uniform(0.2, 1))
-        return 'rgb({:.0f}, {:.0f}, {:.0f})'.format(r * rgb_max, g * rgb_max,
-                                                    b * rgb_max)
-    return single_color_func
 
 
 class WordCloud(object):
@@ -406,7 +321,7 @@ class WordCloud(object):
                 # find font sizes
                 sizes = [x[1] for x in self.layout_]
                 try:
-                    font_size = int(2 * sizes[0] * sizes[1] 
+                    font_size = int(2 * sizes[0] * sizes[1]
                                     / (sizes[0] + sizes[1]))
                 # quick fix for if self.layout_ contains less than 2 values
                 # on very small images it can be empty
