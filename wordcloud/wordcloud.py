@@ -29,6 +29,7 @@ from PIL import ImageFont
 
 from .query_integral_image import query_integral_image
 from .tokenization import unigrams_and_bigrams, process_tokens
+from .group_placement import GroupAwarePlacer
 
 FILE = os.path.dirname(__file__)
 FONT_PATH = os.environ.get('FONT_PATH', os.path.join(FILE, 'DroidSansMono.ttf'))
@@ -291,6 +292,24 @@ class WordCloud(object):
         Statistical Natural Language Processing. MIT press, p. 162
         https://nlp.stanford.edu/fsnlp/promo/colloc.pdf#page=22
 
+    grouping_func : callable, default=None
+        Callable that maps words to group identifiers. Words with the same
+        group identifier will be placed closer together. Return None for
+        ungrouped words.
+
+    group_proximity : str, default='probabilistic'
+        Grouping mode: 'strict' or 'probabilistic'. In strict mode, words
+        must be placed within group_radius of the group centroid. In
+        probabilistic mode, placement is biased toward the group centroid
+        with probability controlled by group_strength.
+
+    group_radius : int, default=50
+        Maximum distance (pixels) from group centroid in strict mode.
+
+    group_strength : float, default=0.7
+        Strength of placement bias in probabilistic mode. 0 = random
+        placement, 1 = always near group centroid.
+
     Attributes
     ----------
     ``words_`` : dict of string to float
@@ -323,7 +342,9 @@ class WordCloud(object):
                  relative_scaling='auto', regexp=None, collocations=True,
                  colormap=None, normalize_plurals=True, contour_width=0,
                  contour_color='black', repeat=False,
-                 include_numbers=False, min_word_length=0, collocation_threshold=30):
+                 include_numbers=False, min_word_length=0, collocation_threshold=30,
+                 grouping_func=None, group_proximity='probabilistic',
+                 group_radius=50, group_strength=0.7):
         if font_path is None:
             font_path = FONT_PATH
         if color_func is None and colormap is None:
@@ -375,8 +396,21 @@ class WordCloud(object):
         self.include_numbers = include_numbers
         self.min_word_length = min_word_length
         self.collocation_threshold = collocation_threshold
+        
+        if grouping_func is not None and not callable(grouping_func):
+            raise TypeError("grouping_func must be callable")
+        if group_proximity not in ('strict', 'probabilistic'):
+            raise ValueError("group_proximity must be 'strict' or 'probabilistic'")
+        if group_radius < 0:
+            raise ValueError("group_radius must be non-negative")
+        if not 0 <= group_strength <= 1:
+            raise ValueError("group_strength must be between 0 and 1")
+        
+        self.grouping_func = grouping_func
+        self.group_proximity = group_proximity
+        self.group_radius = group_radius
+        self.group_strength = group_strength
 
-        # Override the width and height if there is a mask
         if mask is not None:
             self.width = mask.shape[1]
             self.height = mask.shape[0]
@@ -439,6 +473,14 @@ class WordCloud(object):
             boolean_mask = None
             height, width = self.height, self.width
         occupancy = IntegralOccupancyMap(height, width, boolean_mask)
+        
+        group_placer = None
+        if self.grouping_func is not None:
+            group_placer = GroupAwarePlacer(
+                mode=self.group_proximity,
+                radius=self.group_radius,
+                strength=self.group_strength
+            )
 
         img_grey = Image.new("L", (width, height))
         draw = ImageDraw.Draw(img_grey)
@@ -520,10 +562,16 @@ class WordCloud(object):
                     font, orientation=orientation)
                 # get size of resulting text
                 box_size = draw.textbbox((0, 0), word, font=transposed_font, anchor="lt")
-                # find possible places using integral image:
-                result = occupancy.sample_position(box_size[3] + self.margin,
-                                                   box_size[2] + self.margin,
-                                                   random_state)
+                box_size_x = box_size[3] + self.margin
+                box_size_y = box_size[2] + self.margin
+                
+                if group_placer is not None:
+                    group_id = self.grouping_func(word)
+                    result = group_placer.get_placement_position(
+                        group_id, (box_size_x, box_size_y), occupancy, random_state
+                    )
+                else:
+                    result = occupancy.sample_position(box_size_x, box_size_y, random_state)
                 if result is not None:
                     # Found a place
                     break
@@ -551,10 +599,14 @@ class WordCloud(object):
                                           orientation=orientation,
                                           random_state=random_state,
                                           font_path=self.font_path))
-            box_size_x = box_size[3] + self.margin
-            box_size_y = box_size[2] + self.margin
             occupied[x:x + box_size_x, y:y + box_size_y] = 255
             occupancy.update(occupied, x, y)
+            
+            if group_placer is not None:
+                group_id = self.grouping_func(word)
+                if group_id is not None:
+                    group_placer.update_group(group_id, (x, y), (box_size_x, box_size_y))
+            
             last_freq = freq
 
         self.layout_ = list(zip(frequencies, font_sizes, positions,
