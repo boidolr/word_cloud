@@ -41,7 +41,6 @@ class IntegralOccupancyMap(object):
         self.height = height
         self.width = width
         if mask is not None:
-            # the order of the cumsum's is important for speed ?!
             self.integral = np.cumsum(np.cumsum(255 * mask, axis=1),
                                       axis=0).astype(np.uint32)
         else:
@@ -54,8 +53,6 @@ class IntegralOccupancyMap(object):
     def update(self, img_array, pos_x, pos_y):
         partial_integral = np.cumsum(np.cumsum(img_array[pos_x:, pos_y:],
                                                axis=1), axis=0)
-        # paste recomputed part into old image
-        # if x or y is zero it is a bit annoying
         if pos_x > 0:
             if pos_y > 0:
                 partial_integral += (self.integral[pos_x - 1, pos_y:]
@@ -66,6 +63,17 @@ class IntegralOccupancyMap(object):
             partial_integral += self.integral[pos_x:, pos_y - 1][:, np.newaxis]
 
         self.integral[pos_x:, pos_y:] = partial_integral
+
+    def paste(self, img_array, pos_x, pos_y, size_x, size_y):
+        """Efficiently update integral image for a small pasted region.
+        
+        This is more efficient than update() when only a small region changed,
+        as it only recomputes the affected portion.
+        """
+        self.integral[pos_x:, pos_y:] += np.cumsum(
+            np.cumsum(img_array[pos_x:pos_x + size_x, pos_y:pos_y + size_y],
+                     axis=1), axis=0
+        )
 
 
 def random_color_func(word=None, font_size=None, position=None,
@@ -432,10 +440,12 @@ class WordCloud(object):
             height, width = self.height, self.width
         occupancy = IntegralOccupancyMap(height, width, boolean_mask)
 
-        # create image
         img_grey = Image.new("L", (width, height))
         draw = ImageDraw.Draw(img_grey)
-        img_array = np.asarray(img_grey)
+        if boolean_mask is not None:
+            occupied = boolean_mask.astype(np.uint8) * 255
+        else:
+            occupied = np.zeros((height, width), dtype=np.uint8)
         font_sizes, positions, orientations, colors = [], [], [], []
 
         last_freq = 1.
@@ -532,7 +542,6 @@ class WordCloud(object):
                 break
 
             x, y = np.array(result) + self.margin // 2
-            # actually draw the text
             draw.text((y, x), word, fill="white", font=transposed_font)
             positions.append((x, y))
             orientations.append(orientation)
@@ -542,14 +551,10 @@ class WordCloud(object):
                                           orientation=orientation,
                                           random_state=random_state,
                                           font_path=self.font_path))
-            # recompute integral image
-            if self.mask is None:
-                img_array = np.asarray(img_grey)
-            else:
-                img_array = np.asarray(img_grey) + boolean_mask
-            # recompute bottom right
-            # the order of the cumsum's is important for speed ?!
-            occupancy.update(img_array, x, y)
+            box_size_x = box_size[3] + self.margin
+            box_size_y = box_size[2] + self.margin
+            occupied[x:x + box_size_x, y:y + box_size_y] = 255
+            occupancy.update(occupied, x, y)
             last_freq = freq
 
         self.layout_ = list(zip(frequencies, font_sizes, positions,
